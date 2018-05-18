@@ -198,10 +198,10 @@ class CNNSoftmaxLayer(nn.Module):
       chars_inp.append(samples[id2pack[i + 1]][1])
       if len(word_inp) == batch_size or i == len(samples) - 1:
         sub_matrices.append(self.token_embedder.forward(torch.LongTensor(word_inp).view(len(word_inp), 1),
-                                                        torch.LongTensor(chars_inp).view(len(word_inp), 1, len(package[1])), 
+                                                        None if chars_inp[0] is None else torch.LongTensor(chars_inp).view(len(word_inp), 1, len(package[1])), 
                                                         (len(word_inp), 1)).squeeze(1).transpose(0, 1))
-        #if not self.training:
-        sub_matrices[-1] = sub_matrices[-1].detach()
+        if not self.training:
+          sub_matrices[-1] = sub_matrices[-1].detach()
         word_inp, chars_inp = [], [] 
 
     sum = 0
@@ -223,7 +223,7 @@ class CNNSoftmaxLayer(nn.Module):
       for j in range(seq_len):
         if mask[i][j] == 0:
           continue
-        package = (word_inp[i][j].tolist(), chars_inp[i][j].tolist())
+        package = (word_inp[i][j].tolist(), None if chars_inp is None else chars_inp[i][j].tolist())
         if package[0] not in self.all_word_to_column:
           self.all_word.append(package)
           self.all_word_to_column[package[0]] = len(self.all_word_to_column)

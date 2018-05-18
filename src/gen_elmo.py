@@ -295,8 +295,8 @@ def test():
           if use_cuda:
             data = data.cpu()
           data = data.numpy()
-          data = np.average(data, axis=0)
-          #data = data[1]
+          #data = np.average(data, axis=0)
+          data = data[1]
         #print(sent, data.shape)
 
         fout.create_dataset(

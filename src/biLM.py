@@ -59,7 +59,7 @@ def break_sentence(sentence, max_sent_len):
   return ret
 
 
-def read_corpus(path, max_chars=None, max_sent_len=50):
+def read_corpus(path, max_chars=None, max_sent_len=20):
   """
   read raw text file
   :param path: str
@@ -67,21 +67,16 @@ def read_corpus(path, max_chars=None, max_sent_len=50):
   :param max_sent_len: int
   :return:
   """
-  cnt = 0
-  dataset = []
+  data = []
   with codecs.open(path, 'r', encoding='utf-8') as fin:
     for line in fin:
-      data = ['<bos>']
+      data.append('<bos>')
       for token in line.strip().split():
         if max_chars is not None and len(token) + 2 > max_chars:
           token = token[:max_chars - 2]
         data.append(token)
       data.append('<eos>')
-      cnt += len(data)
-      sents = break_sentence(data, max_sent_len)
-      for sent in sents:
-        dataset.append(sent)
-  print(cnt)
+  dataset = break_sentence(data, max_sent_len)
   return dataset
 
 
@@ -311,9 +306,7 @@ def eval_model(model, valid):
 
 
 def train_model(epoch, opt, model, optimizer,
-                train, best_train, 
-                valid=None, best_valid=None, 
-                test=None, test_result=None):
+                train, valid, test, best_train, best_valid, test_result):
   """
   Training model for one epoch
 
@@ -350,7 +343,7 @@ def train_model(epoch, opt, model, optimizer,
     model.zero_grad()
     loss_forward, loss_backward = model.forward(w, c, masks)
 
-    loss = loss_forward + loss_backward
+    loss = (loss_forward + loss_backward) / 2.0
     total_loss += loss_forward.data[0]
     n_tags = sum(lens)
     total_tag += n_tags
@@ -365,32 +358,30 @@ def train_model(epoch, opt, model, optimizer,
       ))
       start_time = time.time()
 
-    if cnt % opt.eval_steps == 0:
-      valid_ppl = eval_model(model, valid)
-      logging.info("Epoch={} iter={} lr={:.6f} valid_ppl={:.6f}".format(
-        epoch, cnt, optimizer.param_groups[0]['lr'], valid_ppl))
+    if cnt % opt.eval_steps == 0 or cnt % len(train_w) == 0:
+      if valid is None:
+        train_ppl = np.exp(total_loss / total_tag)
+        logging.info("Epoch={} iter={} lr={:.6f} train_ppl={:.6f}".format(
+          epoch, cnt, optimizer.param_groups[0]['lr'], train_ppl))
+        if train_ppl < best_train:
+          best_train = train_ppl
+          logging.info("New record achieved on training dataset!")
+          model.save_model(opt.model, opt.save_classify_layer)      
+      else:
+        valid_ppl = eval_model(model, valid)
+        logging.info("Epoch={} iter={} lr={:.6f} valid_ppl={:.6f}".format(
+          epoch, cnt, optimizer.param_groups[0]['lr'], valid_ppl))
 
-      if valid_ppl < best_valid:
-        model.save_model(opt.model, opt.save_classify_layer)
-        best_valid = valid_ppl
-        logging.info("New record achieved!")
+        if valid_ppl < best_valid:
+          model.save_model(opt.model, opt.save_classify_layer)
+          best_valid = valid_ppl
+          logging.info("New record achieved!")
 
-        if test is not None:
-          test_result = eval_model(model, test)
-          logging.info("Epoch={} iter={} lr={:.6f} test_ppl={:.6f}".format(
-            epoch, cnt, optimizer.param_groups[0]['lr'], test_result))
-
-  train_ppl = np.exp(total_loss / total_tag)
-  logging.info("End of Epoch={} iter={} lr={:.6f} train_ppl={:.6f}".format(
-      epoch, cnt, optimizer.param_groups[0]['lr'], train_ppl))
-  if train_ppl < best_train:
-    best_train = train_ppl
-    logging.info("New record achieved on training dataset!")
-    
-  if test is None:
-    return best_train, best_valid
-  else:
-    return best_train, best_valid, test_result
+          if test is not None:
+            test_result = eval_model(model, test)
+            logging.info("Epoch={} iter={} lr={:.6f} test_ppl={:.6f}".format(
+              epoch, cnt, optimizer.param_groups[0]['lr'], test_result))
+  return best_train, best_valid, test_result
 
 
 def get_truncated_vocab(dataset, min_count):
@@ -407,7 +398,7 @@ def get_truncated_vocab(dataset, min_count):
   word_count = list(word_count.items())
   word_count.sort(key=lambda x: x[1], reverse=True)
 
-  for i, count in enumerate(word_count):
+  for i, (word, count) in enumerate(word_count):
     if count < min_count:
       break
 
@@ -440,7 +431,7 @@ def train():
   
   cmd.add_argument("--clip_grad", type=float, default=5, help='the tense of clipped grad.')
 
-  cmd.add_argument('--max_sent_len', type=int, default=50, help='maximum sentence length.')
+  cmd.add_argument('--max_sent_len', type=int, default=20, help='maximum sentence length.')
 
   cmd.add_argument('--min_count', type=int, default=5, help='minimum word count.')
 
@@ -448,7 +439,8 @@ def train():
 
   cmd.add_argument('--save_classify_layer', default=False, action='store_true',
                    help="whether to save the classify layer")
-  cmd.add_argument('--valid_size', type=int, default=10000, help="size of validation dataset when there's no valid.")
+
+  cmd.add_argument('--valid_size', type=int, default=0, help="size of validation dataset when there's no valid.")
   cmd.add_argument('--eval_steps', required=False, type=int, help='report every xx batches.')
 
   opt = cmd.parse_args(sys.argv[2:])
@@ -491,12 +483,14 @@ def train():
       raise ValueError('Unknown token embedder name: {}'.format(token_embedder_name))
     logging.info('valid instance: {}, valid tokens: {}.'.format(len(valid_data),
                                                                 sum([len(s) - 1 for s in valid_data])))
-  else:
+  elif opt.valid_size > 0:
     train_data, valid_data = divide(train_data, opt.valid_size)
     logging.info('training instance: {}, training tokens after division: {}.'.format(
       len(train_data), sum([len(s) - 1 for s in train_data])))
     logging.info('valid instance: {}, valid tokens: {}.'.format(
       len(valid_data), sum([len(s) - 1 for s in valid_data])))
+  else:
+    valid_data = None
 
   if opt.test_path is not None:
     if token_embedder_name == 'cnn':
@@ -556,31 +550,34 @@ def train():
     char_lexicon = None
     char_emb_layer = None
 
-  train_w, train_c, train_lens, train_masks = create_batches(
+  train = create_batches(
     train_data, opt.batch_size, word_lexicon, char_lexicon, config, use_cuda=use_cuda)
 
   if opt.eval_steps is None:
     opt.eval_steps = len(train_w)
   logging.info('Evaluate every {0} batches.'.format(opt.eval_steps))
 
-  valid_w, valid_c, valid_lens, valid_masks = create_batches(
-    valid_data, opt.batch_size, word_lexicon, char_lexicon, config, sort=False, shuffle=False, use_cuda=use_cuda)
-  
+  if valid_data is not None:
+    valid = create_batches(
+      valid_data, opt.batch_size, word_lexicon, char_lexicon, config, sort=False, shuffle=False, use_cuda=use_cuda)
+  else:
+    valid = None
+
   if test_data is not None:
-    test_w, test_c, test_lens, test_masks = create_batches(
+    test = create_batches(
       test_data, opt.batch_size, word_lexicon, char_lexicon, config, sort=False, shuffle=False, use_cuda=use_cuda)
   else:
-    raise ValueError('')
+    test = None
 
   label_to_ix = word_lexicon
   logging.info('vocab size: {0}'.format(len(label_to_ix)))
   
   nclasses = len(label_to_ix)
 
-  for s in train_w:
-    for i in range(s.view(-1).size(0)):
-      if s.view(-1)[i] >= nclasses:
-        print(s.view(-1)[i])
+  #for s in train_w:
+  #  for i in range(s.view(-1).size(0)):
+  #    if s.view(-1)[i] >= nclasses:
+  #      print(s.view(-1)[i])
 
   model = Model(config, word_emb_layer, char_emb_layer, nclasses, use_cuda)
   logging.info(str(model))
@@ -616,30 +613,20 @@ def train():
 
   best_train = 1e+8
   best_valid = 1e+8
-  test_result = None
+  test_result = 1e+8
+
   for epoch in range(opt.max_epoch):
-    if test is None:
-      best_train, best_valid = train_model(epoch, opt, model, optimizer,
-                                           train=(train_w, train_c, train_lens, train_masks),
-                                           best_train=best_train,
-                                           valid=(valid_w, valid_c, valid_lens, valid_masks),
-                                           best_valid=best_valid)
-    else:
-      best_train, best_valid, test_result = train_model(epoch, opt, model, optimizer,
-                                                        train=(train_w, train_c, train_lens, train_masks),
-                                                        best_train=best_train,
-                                                        valid=(valid_w, valid_c, valid_lens, valid_masks),
-                                                        best_valid=best_valid,
-                                                        test=(test_w, test_c, test_lens, test_masks),
-                                                        test_result=test_result)
+    best_train, best_valid, test_result = train_model(epoch, opt, model, optimizer,
+                                                      train, valid, test, best_train, best_valid, test_result)
     if opt.lr_decay > 0:
       optimizer.param_groups[0]['lr'] *= opt.lr_decay
 
-  if test is None:
+  if valid_data is None:
+    logging.info("best train ppl: {:.6f}.".format(best_train))
+  elif test_data is None:
     logging.info("best train ppl: {:.6f}, best valid ppl: {:.6f}.".format(best_train, best_valid))
   else:
-    logging.info("best train ppl: {:.6f}, best valid ppl: {:.6f}, test ppl: {:.6f}.".format(
-      best_train, best_valid, test_result))
+    logging.info("best train ppl: {:.6f}, best valid ppl: {:.6f}, test ppl: {:.6f}.".format(best_train, best_valid, test_result))
 
 
 def test():
