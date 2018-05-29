@@ -202,7 +202,9 @@ def test():
   cmd = argparse.ArgumentParser('The testing components of')
   cmd.add_argument('--gpu', default=-1, type=int, help='use id of gpu, -1 if cpu.')
   cmd.add_argument("--input", help="the path to the raw text file.")
-  cmd.add_argument('--output', help='the path to the embedding file.')
+  cmd.add_argument('--output_ave', help='the path to the average embedding file.')
+  cmd.add_argument('--output_lstm', help='the path to the 1st lstm-output embedding file.')
+
   cmd.add_argument("--model", required=True, help="path to save model")
   cmd.add_argument("--batch_size", "--batch", type=int, default=1, help='the batch size.')
 
@@ -266,48 +268,54 @@ def test():
 
   print(max([len(x) for x in test]))
 
-  if args.output is not None:
-    fpo = codecs.open(args.output, 'w', encoding='utf-8')
-  else:
-    fpo = codecs.getwriter('utf-8')(sys.stdout)
-
   model.eval()
 
   sent_set = set()
 
   cnt = 0
 
-  with h5py.File(args.output, 'w') as fout:
-    for w, c, lens, masks, texts in zip(test_w, test_c, test_lens, test_masks, test_text):
-      output = model.forward(w, c, masks)
-      for i, text in enumerate(texts):
-        sent = ' '.join(text)
-        if sent in sent_set:
-          continue
-        sent_set.add(sent)
-        if config['encoder']['name'].lower() == 'lstm':
-          data = output[i, 1:lens[i]-1, :].data
-          if use_cuda:
-            data = data.cpu()
-          data = data.numpy()
-        elif config['encoder']['name'].lower() == 'elmo':
-          data = output[:, i, 1:lens[i]-1, :].data
-          if use_cuda:
-            data = data.cpu()
-          data = data.numpy()
-          #data = np.average(data, axis=0)
-          data = data[1]
-        #print(sent, data.shape)
+  fout_ave = h5py.File(args.output_ave, 'w') if args.output_ave is not None else None
+  fout_lstm = h5py.File(args.output_lstm, 'w') if args.output_lstm is not None else None
 
-        fout.create_dataset(
+  for w, c, lens, masks, texts in zip(test_w, test_c, test_lens, test_masks, test_text):
+    output = model.forward(w, c, masks)
+    for i, text in enumerate(texts):
+      sent = ' '.join(text)
+      if sent in sent_set:
+        continue
+      sent_set.add(sent)
+      if config['encoder']['name'].lower() == 'lstm':
+        data = output[i, 1:lens[i]-1, :].data
+        if use_cuda:
+          data = data.cpu()
+        data = data.numpy()
+      elif config['encoder']['name'].lower() == 'elmo':
+        data = output[:, i, 1:lens[i]-1, :].data
+        if use_cuda:
+          data = data.cpu()
+        data = data.numpy()
+      
+      if fout_ave is not None:
+        data_ave = np.average(data, axis=0)
+        fout_ave.create_dataset(
           sent,
-          data.shape, dtype='float32',
-          data=data
+          data_ave.shape, dtype='float32',
+          data=data_ave
+        )        
+      if fout_lstm is not None:
+        data_lstm = data[1]
+        fout_lstm.create_dataset(
+          sent,
+          data_lstm.shape, dtype='float32',
+          data=data_lstm
         )
-        cnt += 1
-        if cnt % 1000 == 0:
-          logging.info('Finished {0} sentences.'.format(cnt))
-  fout.close()
+      cnt += 1
+      if cnt % 1000 == 0:
+        logging.info('Finished {0} sentences.'.format(cnt))
+  if fout_ave is not None: 
+    fout_ave.close()
+  if fout_lstm is not None:
+    fout_lstm.close()
 
 if __name__ == "__main__":
   if len(sys.argv) > 1 and sys.argv[1] == 'test':
