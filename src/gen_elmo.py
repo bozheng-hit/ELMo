@@ -29,8 +29,10 @@ import collections
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)-15s %(levelname)s: %(message)s')
 
+
 def dict2namedtuple(dic):
   return collections.namedtuple('Namespace', dic.keys())(**dic)
+
 
 def read_corpus(path, max_chars = None):
   """
@@ -44,7 +46,7 @@ def read_corpus(path, max_chars = None):
     for line in fin.read().strip().split('\n'):
       data = ['<bos>']
       text = []
-      for token in line.split():
+      for token in line.split('\t'):
         text.append(token)
         if max_chars is not None and len(token) + 2 > max_chars:
           token = token[:max_chars - 2]
@@ -53,6 +55,99 @@ def read_corpus(path, max_chars = None):
       dataset.append(data)
       textset.append(text)
   return dataset, textset
+
+
+def read_conll_corpus(path, max_chars=None):
+  """
+
+  :param path:
+  :param max_chars:
+  :return:
+  """
+  dataset = []
+  textset = []
+  with codecs.open(path, 'r', encoding='utf-8') as fin:
+    for payload in fin.read().strip().split('\n\n'):
+      data = ['<bos>']
+      text = []
+      lines = payload.splitlines()
+      body = [line for line in lines if not line.startswith('#')]
+      for line in body:
+        fields = line.split('\t')
+        num, token = fields[0], fields[1]
+        if '-' in num or '.' in num:
+          continue
+        text.append(token)
+        if max_chars is not None and len(token) + 2 > max_chars:
+          token = token[:max_chars - 2]
+        data.append(token)
+      data.append('<eos>')
+      dataset.append(data)
+      textset.append(text)
+  return dataset, textset
+
+
+def read_conll_char_corpus(path, max_chars=None):
+  """
+
+  :param path:
+  :param max_chars:
+  :return:
+  """
+  dataset = []
+  textset = []
+  with codecs.open(path, 'r', encoding='utf-8') as fin:
+    for payload in fin.read().strip().split('\n\n'):
+      data = ['<bos>']
+      text = []
+      lines = payload.splitlines()
+      body = [line for line in lines if not line.startswith('#')]
+      for line in body:
+        fields = line.split('\t')
+        num, token = fields[0], fields[1]
+        if '-' in num or '.' in num:
+          continue
+        for ch in token:
+          text.append(ch)
+          if max_chars is not None and len(ch) + 2 > max_chars:
+            ch = ch[:max_chars - 2]
+          data.append(ch)
+      data.append('<eos>')
+      dataset.append(data)
+      textset.append(text)
+  return dataset, textset
+
+
+def read_conll_char_vi_corpus(path, max_chars=None):
+  """
+
+  :param path:
+  :param max_chars:
+  :return:
+  """
+  dataset = []
+  textset = []
+  with codecs.open(path, 'r', encoding='utf-8') as fin:
+    for payload in fin.read().strip().split('\n\n'):
+      data = ['<bos>']
+      text = []
+      lines = payload.splitlines()
+      body = [line for line in lines if not line.startswith('#')]
+      for line in body:
+        fields = line.split('\t')
+        num, token = fields[0], fields[1]
+        if '-' in num or '.' in num:
+          continue
+        for ch in token.split():
+          text.append(ch)
+          if max_chars is not None and len(ch) + 2 > max_chars:
+            ch = ch[:max_chars - 2]
+          data.append(ch)
+      data.append('<eos>')
+      dataset.append(data)
+      textset.append(text)
+  return dataset, textset
+
 
 def create_one_batch(x, word2id, char2id, config, oov='<oov>', pad='<pad>', sort=True, use_cuda=False):
   batch_size = len(x)
@@ -107,7 +202,7 @@ def create_one_batch(x, word2id, char2id, config, oov='<oov>', pad='<pad>', sort
       masks[0][i][j] = 1
       if j + 1 < len(x_i):
         masks[1].append(i * max_len + j)
-      if j > 0: 
+      if j > 0:
         masks[2].append(i * max_len + j)
 
   assert len(masks[1]) <= batch_size * max_len
@@ -116,8 +211,9 @@ def create_one_batch(x, word2id, char2id, config, oov='<oov>', pad='<pad>', sort
   masks[1] = torch.LongTensor(masks[1])
   masks[2] = torch.LongTensor(masks[2])
 
-  #print(batch_w.view(-1).size(0), masks[1].view(-1).size(0), masks[2].view(-1).size(0))  
+  #print(batch_w.view(-1).size(0), masks[1].view(-1).size(0), masks[2].view(-1).size(0))
   return batch_w, batch_c, lens, masks
+
 
 # shuffle training examples and create mini-batches
 def create_batches(x, batch_size, word2id, char2id, config, perm=None, shuffle=True, sort=True, use_cuda=False, text=None):
@@ -139,7 +235,7 @@ def create_batches(x, batch_size, word2id, char2id, config, perm=None, shuffle=T
   for i in range(nbatch):
     start_id, end_id = i * size, (i + 1) * size
     bw, bc, blens, bmasks = create_one_batch(x[start_id: end_id], word2id, char2id, config,
-                                         sort=sort, use_cuda=use_cuda)
+                                             sort=sort, use_cuda=use_cuda)
     sum_len += sum(blens)
     batches_w.append(bw)
     batches_c.append(bc)
@@ -166,7 +262,7 @@ def create_batches(x, batch_size, word2id, char2id, config, perm=None, shuffle=T
 
 class Model(nn.Module):
   def __init__(self, config, word_emb_layer, char_emb_layer, use_cuda=False):
-    super(Model, self).__init__() 
+    super(Model, self).__init__()
     self.use_cuda = use_cuda
     self.config = config
 
@@ -189,7 +285,7 @@ class Model(nn.Module):
       encoder_output = self.encoder(token_embedding, mask)
       sz = encoder_output.size()
       token_embedding = torch.cat([token_embedding, token_embedding], dim=2).view(1, sz[1], sz[2], sz[3])
-      encoder_output = torch.cat([token_embedding, encoder_output], dim = 0)
+      encoder_output = torch.cat([token_embedding, encoder_output], dim=0)
     elif self.config['encoder']['name'] == 'lstm':
       encoder_output = self.encoder(token_embedding)
     return encoder_output
@@ -197,10 +293,13 @@ class Model(nn.Module):
   def load_model(self, path):
     self.token_embedder.load_state_dict(torch.load(os.path.join(path, 'token_embedder.pkl'), map_location=lambda storage, loc: storage))
     self.encoder.load_state_dict(torch.load(os.path.join(path, 'encoder.pkl'), map_location=lambda storage, loc: storage))
-    
-def test():
+
+
+def test_main():
   cmd = argparse.ArgumentParser('The testing components of')
   cmd.add_argument('--gpu', default=-1, type=int, help='use id of gpu, -1 if cpu.')
+  cmd.add_argument('--input_format', default='plain', choices=('plain', 'conll', 'conll_char', 'conll_char_vi'),
+                   help='the input format.')
   cmd.add_argument("--input", help="the path to the raw text file.")
   cmd.add_argument('--output_ave', help='the path to the average embedding file.')
   cmd.add_argument('--output_lstm', help='the path to the 1st lstm-output embedding file.')
@@ -213,12 +312,11 @@ def test():
   if args.gpu >= 0:
     torch.cuda.set_device(args.gpu)
   use_cuda = args.gpu >= 0 and torch.cuda.is_available()
-  
+
   args2 = dict2namedtuple(json.load(codecs.open(os.path.join(args.model, 'config.json'), 'r', encoding='utf-8')))
 
   with open(args2.config_path, 'r') as fin:
     config = json.load(fin)
-
 
   if config['token_embedder']['char_dim'] > 0:
     char_lexicon = {}
@@ -249,7 +347,7 @@ def test():
   else:
     word_lexicon = None
     word_emb_layer = None
-  
+
   model = Model(config, word_emb_layer, char_emb_layer, use_cuda)
 
   if use_cuda:
@@ -258,13 +356,26 @@ def test():
   logging.info(str(model))
   model.load_model(args.model)
   if config['token_embedder']['name'].lower() == 'cnn':
-    test, text = read_corpus(args.input, config['token_embedder']['max_characters_per_token'])
+    if args.input_format == 'plain':
+      test, text = read_corpus(args.input, config['token_embedder']['max_characters_per_token'])
+    elif args.input_format == 'conll':
+      test, text = read_conll_corpus(args.input, config['token_embedder']['max_characters_per_token'])
+    elif args.input_format == 'conll_char':
+      test, text = read_conll_char_corpus(args.input, config['token_embedder']['max_characters_per_token'])
+    else:
+      test, text = read_conll_char_vi_corpus(args.input, config['token_embedder']['max_characters_per_token'])
   elif config['token_embedder']['name'].lower() == 'lstm':
-    test, text = read_corpus(args.input)
+    if args.input_format == 'plain':
+      test, text = read_corpus(args.input)
+    elif args.input_format == 'conll':
+      test, text = read_conll_corpus(args.input)
+    elif args.input_format == 'conll_char':
+      test, text = read_conll_char_corpus(args.input)
+    else:
+      test, text = read_conll_char_vi_corpus(args.input)
 
   test_w, test_c, test_lens, test_masks, test_text = create_batches(
     test, args.batch_size, word_lexicon, char_lexicon, config, use_cuda=use_cuda, text=text)
-
 
   print(max([len(x) for x in test]))
 
@@ -280,7 +391,9 @@ def test():
   for w, c, lens, masks, texts in zip(test_w, test_c, test_lens, test_masks, test_text):
     output = model.forward(w, c, masks)
     for i, text in enumerate(texts):
-      sent = ' '.join(text)
+      sent = '\t'.join(text)
+      sent = sent.replace('.', '$period$')
+      sent = sent.replace('/', '$backslash$')
       if sent in sent_set:
         continue
       sent_set.add(sent)
@@ -294,14 +407,13 @@ def test():
         if use_cuda:
           data = data.cpu()
         data = data.numpy()
-      
       if fout_ave is not None:
         data_ave = np.average(data, axis=0)
         fout_ave.create_dataset(
           sent,
           data_ave.shape, dtype='float32',
           data=data_ave
-        )        
+        )
       if fout_lstm is not None:
         data_lstm = data[1]
         fout_lstm.create_dataset(
@@ -312,13 +424,14 @@ def test():
       cnt += 1
       if cnt % 1000 == 0:
         logging.info('Finished {0} sentences.'.format(cnt))
-  if fout_ave is not None: 
+  if fout_ave is not None:
     fout_ave.close()
   if fout_lstm is not None:
     fout_lstm.close()
 
+
 if __name__ == "__main__":
   if len(sys.argv) > 1 and sys.argv[1] == 'test':
-    test()
+    test_main()
   else:
     print('Usage: {0} [test] [options]'.format(sys.argv[0]), file=sys.stderr)
